@@ -13,12 +13,11 @@ from sqlalchemy.orm import Session
 from .config import (APP_ENV, APP_PRICE_KES, OTP_MAX_ATTEMPTS,
                      OTP_RESEND_SECONDS, OTP_TTL_SECONDS, env)
 from .daraja import query_stk, start_buygoods_push
-from .db import Base, engine, get_db
+from .db import get_db
 from .email_service import send_login_code
 from .models import EmailChallenge, Payment, User
 from .security import check_secret, current_user, issue_token, otp_code, otp_digest
 
-Base.metadata.create_all(bind=engine)
 check_secret()
 
 app = FastAPI(title="Zetech Learning Backend", version="1.0.0")

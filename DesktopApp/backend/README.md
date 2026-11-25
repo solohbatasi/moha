@@ -28,7 +28,13 @@ docker compose up -d db
 
 If PostgreSQL is already installed or hosted, skip Compose and set `DATABASE_URL` in `.env` to that database. Use the form `postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE`; URL-encode special characters in the username or password. Do not use the example development password outside a local machine.
 
-Start PostgreSQL first, then edit `.env`. The example JWT value is deliberately rejected: replace it with a random secret of at least 32 characters. The API can start and serve `/health` without SMTP or Daraja settings, but email sign-in needs a working SMTP sender and payments need Daraja sandbox credentials plus a public HTTPS callback. Run:
+Start PostgreSQL first, then edit `.env`. The example JWT value is deliberately rejected: replace it with a random secret of at least 32 characters. Before starting the API for the first time, create its tables from the checked-in Alembic migration:
+
+```powershell
+alembic upgrade head
+```
+
+The API can then start and serve `/health` without SMTP or Daraja settings, but email sign-in needs a working SMTP sender and payments need Daraja sandbox credentials plus a public HTTPS callback. Run:
 
 ```powershell
 uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -65,6 +71,12 @@ Copy `.env.example` and set:
 - `DATABASE_URL`: PostgreSQL connection string. For production, use a managed PostgreSQL database, TLS if required by the provider, and persistent backups.
 - `CLIENT_ORIGINS`: comma-separated origins if a browser client is added. The current PySide desktop client is not subject to browser CORS.
 
+## Database migrations
+
+The initial schema is in `alembic/versions/0001_initial_tables.py`. Run `alembic upgrade head` once for a new database, and again after deploying each new migration. For a schema change, create a candidate with `alembic revision --autogenerate -m "describe change"`, review the generated file, then apply it with `alembic upgrade head`.
+
+Earlier versions of this app called SQLAlchemy `create_all()` on startup. If that already created these tables in the target database, do not run the initial migration directly against those existing tables. First confirm they match the migration, then mark the baseline with `alembic stamp head`; this records the revision without changing tables. On a fresh database, use `alembic upgrade head` instead.
+
 Never send credentials in chat, commit `.env`, or put Daraja keys in the desktop app. If credentials have already been shared outside the trusted backend environment, rotate them in Daraja.
 
 ## Routes
@@ -80,4 +92,10 @@ The callback is public because Daraja calls it. It grants access only after the 
 
 ## Hosting checklist
 
-Deploy this folder as an API service with HTTPS, PostgreSQL, SMTP access, and environment secrets. Expose the callback path publicly. Point the desktop app's `API_URL` at that API. Back up the database because it contains user and payment records.
+Deploy this folder as an API service with HTTPS, PostgreSQL, SMTP access, and environment secrets. There is no Python `public` directory; keep the code and `.env` outside `public_html`.
+
+### cPanel note
+
+Check whether your cPanel account has **Setup Python App** or **Application Manager**, and whether it has **PostgreSQL Databases**. PostgreSQL support is optional in cPanel and may need to be enabled by the host. The current app is FastAPI (ASGI); cPanel's standard Passenger Python instructions describe WSGI apps. Do not point Passenger directly at `app.main:app` as if it were Flask. Ask the host whether the account supports ASGI/Uvicorn apps. If it only supports Passenger/WSGI, an ASGI-to-WSGI adapter may be possible, but it needs a compatibility check with the async M-Pesa callback before relying on it.
+
+If the host supports a persistent Uvicorn service, use an API subdomain such as `api.example.com`, run Uvicorn bound to localhost, and have the web server proxy HTTPS requests to it. Otherwise, use the host's supported Python application interface or deploy the API to a service that supports ASGI. In either case, expose `/api/payments/mpesa/callback` publicly over HTTPS, point the desktop app's `API_URL` at the public HTTPS API origin, and back up PostgreSQL because it contains user and payment records.
