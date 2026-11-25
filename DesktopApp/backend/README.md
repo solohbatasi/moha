@@ -31,7 +31,7 @@ If PostgreSQL is already installed or hosted, skip Compose and set `DATABASE_URL
 Start PostgreSQL first, then edit `.env`. The example JWT value is deliberately rejected: replace it with a random secret of at least 32 characters. Before starting the API for the first time, create its tables from the checked-in Alembic migration:
 
 ```powershell
-alembic upgrade head
+python -m alembic upgrade head
 ```
 
 The API can then start and serve `/health` without SMTP or Daraja settings, but email sign-in needs a working SMTP sender and payments need Daraja sandbox credentials plus a public HTTPS callback. Run:
@@ -41,6 +41,18 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 The API docs are available at `/docs`; health check is `/health`. The desktop app points to `http://127.0.0.1:8000` by default. For a separately hosted backend, change `API_URL` in `DesktopApp/main.py` to the public HTTPS API origin before packaging the client.
+
+### cPanel terminal commands
+
+Activate the Python environment shown by cPanel's **Setup Python App** page, then run these from the backend directory. Do not use a Windows `.venv` copied from your computer.
+
+```bash
+cd ~/moha/DesktopApp/backend
+python -m pip install -r requirements.txt
+python -m alembic upgrade head
+```
+
+Replace `~/moha` if your uploaded project is in another home-directory path. The cPanel environment activation command must be run first so `python` points to the app's virtual environment.
 
 ### Local test sign-in
 
@@ -79,9 +91,9 @@ Copy `.env.example` and set:
 
 ## Database migrations
 
-The initial schema is in `alembic/versions/0001_initial_tables.py`. Run `alembic upgrade head` once for a new database, and again after deploying each new migration. For a schema change, create a candidate with `alembic revision --autogenerate -m "describe change"`, review the generated file, then apply it with `alembic upgrade head`.
+The initial schema is in `alembic/versions/0001_initial_tables.py`. Run `python -m alembic upgrade head` once for a new database, and again after deploying each new migration. For a schema change, create a candidate with `python -m alembic revision --autogenerate -m "describe change"`, review the generated file, then apply it with `python -m alembic upgrade head`.
 
-Earlier versions of this app called SQLAlchemy `create_all()` on startup. If that already created these tables in the target database, do not run the initial migration directly against those existing tables. First confirm they match the migration, then mark the baseline with `alembic stamp head`; this records the revision without changing tables. On a fresh database, use `alembic upgrade head` instead.
+Earlier versions of this app called SQLAlchemy `create_all()` on startup. If that already created these tables in the target database, do not run the initial migration directly against those existing tables. First confirm they match the migration, then mark the baseline with `python -m alembic stamp head`; this records the revision without changing tables. On a fresh database, use `python -m alembic upgrade head` instead.
 
 Never send credentials in chat, commit `.env`, or put Daraja keys in the desktop app. If credentials have already been shared outside the trusted backend environment, rotate them in Daraja.
 
