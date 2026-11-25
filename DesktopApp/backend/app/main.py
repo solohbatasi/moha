@@ -11,7 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import (APP_ENV, APP_PRICE_KES, OTP_MAX_ATTEMPTS,
-                     OTP_RESEND_SECONDS, OTP_TTL_SECONDS, env)
+                     OTP_RESEND_SECONDS, OTP_TTL_SECONDS, TEST_ACCESS_TOKEN,
+                     TEST_MODE, TEST_PASSWORD, TEST_USER_EMAIL, env)
 from .daraja import query_stk, start_buygoods_push
 from .db import get_db
 from .email_service import send_login_code
@@ -20,7 +21,7 @@ from .security import check_secret, current_user, issue_token, otp_code, otp_dig
 
 check_secret()
 
-app = FastAPI(title="Zetech Learning Backend", version="1.0.0")
+app = FastAPI(title="Codility Pro 254 Backend", version="1.0.0")
 origins = [origin.strip() for origin in env("CLIENT_ORIGINS", "*").split(",") if origin.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins or ["*"],
                    allow_credentials=False, allow_methods=["GET", "POST"],
@@ -35,11 +36,19 @@ class EmailVerify(EmailRequest):
     code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
+class TestLogin(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
 class PaymentRequest(BaseModel):
     phone: str = Field(min_length=9, max_length=16)
 
 
 def has_access(db: Session, user_id: int) -> bool:
+    if TEST_MODE:
+        user = db.get(User, user_id)
+        if user is not None and user.email == TEST_USER_EMAIL:
+            return True
     return db.scalar(select(Payment.id).where(Payment.user_id == user_id,
                                                Payment.status == "paid").limit(1)) is not None
 
@@ -94,6 +103,23 @@ def request_email_code(payload: EmailRequest, db: Session = Depends(get_db)):
         logging.getLogger(__name__).exception("Unable to send sign-in code")
         raise HTTPException(status_code=503, detail="Email delivery is temporarily unavailable") from exc
     return {"success": True, "message": "If the address can receive mail, a sign-in code has been sent."}
+
+
+@app.post("/api/auth/test-login")
+def test_login(payload: TestLogin, request: Request, db: Session = Depends(get_db)):
+    if (not TEST_MODE or request.client is None or
+            request.client.host not in {"127.0.0.1", "::1", "localhost"}):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not secrets.compare_digest(payload.password, TEST_PASSWORD):
+        raise HTTPException(status_code=401, detail="Invalid test password")
+    user = db.scalar(select(User).where(User.email == TEST_USER_EMAIL))
+    if user is None:
+        user = User(email=TEST_USER_EMAIL, created_at=int(time.time()))
+        db.add(user)
+        db.commit()
+    return {"success": True, "access_token": TEST_ACCESS_TOKEN,
+            "token_type": "bearer", "email": TEST_USER_EMAIL,
+            "has_access": True, "test_mode": True}
 
 
 @app.post("/api/auth/email/verify")

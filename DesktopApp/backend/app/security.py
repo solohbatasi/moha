@@ -4,11 +4,13 @@ import secrets
 import time
 
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .config import JWT_SECRET
+from .config import (JWT_SECRET, TEST_ACCESS_TOKEN, TEST_MODE,
+                     TEST_USER_EMAIL)
 from .db import get_db
 from .models import User
 
@@ -35,11 +37,20 @@ def issue_token(user: User) -> str:
 
 
 def current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
 ) -> User:
     if credentials is None:
         raise HTTPException(status_code=401, detail="Sign-in required")
+    if credentials.credentials == TEST_ACCESS_TOKEN:
+        if (not TEST_MODE or request.client is None or
+                request.client.host not in {"127.0.0.1", "::1", "localhost"}):
+            raise HTTPException(status_code=401, detail="Invalid or expired access token")
+        user = db.scalar(select(User).where(User.email == TEST_USER_EMAIL))
+        if user is None:
+            raise HTTPException(status_code=401, detail="Test sign-in required")
+        return user
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
         user_id = int(payload["sub"])

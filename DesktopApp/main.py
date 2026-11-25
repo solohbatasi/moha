@@ -24,7 +24,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QWidget, QStackedWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QPlainTextEdit, QComboBox,
@@ -38,6 +38,10 @@ from PySide6.QtWidgets import (
 CONFIG = {
     "API_URL":   "http://127.0.0.1:8000",
     "HTTP_TIMEOUT": 15,
+    # Local UI development: open the project workspace without auth or payment.
+    "DEVMODE": os.getenv("CODILITY_DEVMODE", "false").strip().lower() in {
+        "1", "true", "yes",
+    },
     # typing knobs
     "DEFAULT_DELAY_MIN_MS": 15,
     "DEFAULT_DELAY_MAX_MS": 45,
@@ -46,6 +50,10 @@ CONFIG = {
     # project
     "PROJECT_DIR_NAME": "MY Site",
 }
+TEST_MODE = os.getenv("CODILITY_TEST_MODE", "").strip().lower() in {
+    "1", "true", "yes",
+}
+TEST_PASSWORD = os.getenv("CODILITY_TEST_PASSWORD", "12345678")
 
 # ============================================================================
 
@@ -223,6 +231,86 @@ def import_bundle_from_path(path: Path) -> dict:
     raise ValueError("Select a folder or .zip containing index.html/index.css/script.js")
 
 
+def build_long_typing_script(hours: int, delay_min_ms: int, delay_max_ms: int) -> str:
+    """Build a readable JavaScript journal sized for the selected typing duration."""
+    # Allow for SendInput and Python overhead when the configured delay is zero.
+    average_delay = max(20, delay_min_ms + delay_max_ms) / 2000
+    target_chars = max(1, int(hours * 60 * 60 / average_delay))
+    titles = (
+        "A small interface improvement", "Notes from a focused work session",
+        "A better way to organize ideas", "Making feedback easier to understand",
+        "A useful detail discovered during testing", "Keeping a project welcoming",
+        "A calmer path through a busy screen", "Turning a rough sketch into a plan",
+    )
+    observations = (
+        "People move with more confidence when each screen has one clear purpose.",
+        "A short explanation beside an action can prevent a surprising mistake.",
+        "Consistent names make a growing project easier to explore and maintain.",
+        "Small improvements are easier to review when their intent is written down.",
+        "A useful empty state gives someone a clear next step instead of a dead end.",
+        "Readable defaults help a new contributor understand the shape of a feature.",
+    )
+    experiments = (
+        "I will try a simpler layout, check it at a narrow width, and keep the version that reads naturally.",
+        "I will separate the data from the display and verify that each part has one responsibility.",
+        "I will test the ordinary path first, then make an edge case visible without adding noise.",
+        "I will use a descriptive name, keep the function small, and compare the result with the original goal.",
+        "I will add one focused example and make sure the next person can follow it without extra context.",
+    )
+    next_steps = (
+        "Next, review the behavior with fresh eyes and write down anything that still feels unclear.",
+        "Next, ask someone to try the flow and note where they pause or need more information.",
+        "Next, keep the useful parts, remove unnecessary steps, and update the project notes.",
+        "Next, check the change on a smaller screen and make the primary action easy to find.",
+        "Next, preserve this lesson as a small example the team can reuse in another feature.",
+    )
+
+    lines = [
+        "/**",
+        " * Codility Pro 254 long typing practice",
+        " * A readable field journal about thoughtful software design.",
+        " * Each entry is kept as data so this file remains valid JavaScript.",
+        " */",
+        "const codilityFieldJournal = [",
+    ]
+    index = 0
+    current_chars = sum(map(len, lines))
+    while current_chars < target_chars:
+        title = titles[index % len(titles)]
+        observation = observations[(index * 3) % len(observations)]
+        experiment = experiments[(index * 2) % len(experiments)]
+        next_step = next_steps[(index * 4) % len(next_steps)]
+        comma = ","
+        lines.append(
+            f'  {{ day: {index + 1}, title: {json.dumps(title)}, '
+            f'observation: {json.dumps(observation)}, '
+            f'experiment: {json.dumps(experiment)}, '
+            f'nextStep: {json.dumps(next_step)} }}{comma}'
+        )
+        current_chars += len(lines[-1])
+        index += 1
+    lines.extend([
+        "];",
+        "",
+        "function summarizeFieldJournal(entries = codilityFieldJournal) {",
+        "  return entries.map(({ day, title }) => `Day ${day}: ${title}`).join(\"\\n\");",
+        "}",
+        "",
+        "function findJournalEntries(query, entries = codilityFieldJournal) {",
+        "  const normalizedQuery = String(query).trim().toLowerCase();",
+        "  if (!normalizedQuery) return [];",
+        "  return entries.filter((entry) =>",
+        "    `${entry.title} ${entry.observation} ${entry.experiment} ${entry.nextStep}`",
+        "      .toLowerCase()",
+        "      .includes(normalizedQuery),",
+        "  );",
+        "}",
+        "",
+        "console.log(`Journal entries: ${codilityFieldJournal.length}`);",
+    ])
+    return "\n".join(lines) + "\n"
+
+
 # ----------------------------------------------------------------------------
 # Auth client
 # ----------------------------------------------------------------------------
@@ -246,6 +334,11 @@ class AuthClient:
 
     def request_email_code(self, email: str):
         return self._post("/api/auth/email/request", {"email": email})
+
+    def test_login(self, password: str):
+        body = self._post("/api/auth/test-login", {"password": password})
+        self.token = body["access_token"]
+        return body
 
     def verify_email_code(self, email: str, code: str):
         body = self._post("/api/auth/email/verify", {"email": email, "code": code})
@@ -367,9 +460,21 @@ class EmailAuthScreen(QWidget):
         self.email = ""
         self.stage = 1
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(60, 60, 60, 60)
-        title = QLabel("Zetech Learning — Access")
+        lay.setContentsMargins(60, 42, 60, 60)
+        logo = QLabel()
+        logo_path = Path(__file__).resolve().parent / "MY Site" / "hummingbird.svg"
+        logo_pixmap = QPixmap(str(logo_path))
+        if not logo_pixmap.isNull():
+            logo.setPixmap(logo_pixmap.scaled(
+                150, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            logo.setText("✳")
+            logo.setStyleSheet("font-size: 42px; color: #6c9c46;")
+        logo.setAlignment(Qt.AlignCenter)
+        lay.addWidget(logo)
+        title = QLabel("Codility Pro 254 — Access")
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
+        title.setAlignment(Qt.AlignCenter)
         lay.addWidget(title)
         self.hint = QLabel("Enter your email address to receive a sign-in code.")
         self.hint.setWordWrap(True)
@@ -384,7 +489,29 @@ class EmailAuthScreen(QWidget):
         self.status.setStyleSheet("color: #b91c1c;")
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
+        if TEST_MODE:
+            test_label = QLabel("LOCAL TEST MODE · email and payment are skipped")
+            test_label.setStyleSheet("color: #6c9c46; font-size: 12px; font-weight: 600;")
+            lay.addWidget(test_label)
+            self.test_password = QLineEdit(TEST_PASSWORD)
+            self.test_password.setEchoMode(QLineEdit.Password)
+            self.test_password.setPlaceholderText("Test password")
+            lay.addWidget(self.test_password)
+            self.test_button = QPushButton("Enter test mode")
+            self.test_button.clicked.connect(self._test_login)
+            lay.addWidget(self.test_button)
         lay.addStretch(1)
+
+    def _test_login(self):
+        self.status.setText("")
+        self.test_button.setEnabled(False)
+        try:
+            result = self.auth.test_login(self.test_password.text())
+            self.authed.emit(bool(result.get("has_access")))
+        except Exception as error:
+            self.status.setText(str(error))
+        finally:
+            self.test_button.setEnabled(True)
 
     def _submit(self):
         self.status.setText("")
@@ -475,6 +602,7 @@ class MainScreen(QWidget):
     def __init__(self):
         super().__init__()
         self.current_files = dict(DEFAULT_BUNDLE)
+        self.typing_target_file = "index.html"
         self.typing_thread = None
         self.typing_worker = None
         self.esc = EscHotkey(self._on_esc)
@@ -521,6 +649,20 @@ class MainScreen(QWidget):
         form.addRow(self.chk_jitter)
         form.addRow("Jitter radius (px)", self.spin_jr)
         lv.addWidget(cfg_box)
+
+        test_box = QGroupBox("Long typing test")
+        test_layout = QVBoxLayout(test_box)
+        test_hours_row = QHBoxLayout()
+        test_hours_row.addWidget(QLabel("Target hours"))
+        self.test_hours = QSpinBox()
+        self.test_hours.setRange(1, 24)
+        self.test_hours.setValue(10)
+        test_hours_row.addWidget(self.test_hours)
+        test_layout.addLayout(test_hours_row)
+        self.btn_long_test = QPushButton("Generate readable test code")
+        self.btn_long_test.clicked.connect(self._load_long_typing_test)
+        test_layout.addWidget(self.btn_long_test)
+        lv.addWidget(test_box)
 
         lv.addStretch(1)
 
@@ -576,6 +718,7 @@ class MainScreen(QWidget):
             return
         try:
             self.current_files = load_template(name)
+            self.typing_target_file = "index.html"
             self._render_preview()
             self.status.showMessage(f"Loaded template: {name}")
         except Exception as e:
@@ -591,10 +734,24 @@ class MainScreen(QWidget):
             path = zpath
         try:
             self.current_files = import_bundle_from_path(Path(path))
+            self.typing_target_file = "index.html"
             self._render_preview()
             self.status.showMessage("Imported bundle into preview (not yet saved).")
         except Exception as e:
             QMessageBox.warning(self, "Import failed", str(e))
+
+    def _load_long_typing_test(self):
+        hours = self.test_hours.value()
+        script = build_long_typing_script(
+            hours, self.spin_dmin.value(), self.spin_dmax.value())
+        self.typing_target_file = "script.js"
+        self.preview.setPlainText(script)
+        estimated_hours = len(script) * (
+            max(20, self.spin_dmin.value() + self.spin_dmax.value())) / 2000 / 3600
+        self.status.showMessage(
+            f"Loaded {len(script):,} characters of readable JavaScript; "
+            f"estimated typing time {estimated_hours:.1f} hours at current delays. "
+            "Select a project template to return to its preview.")
 
     def _on_save_template(self):
         from PySide6.QtWidgets import QInputDialog
@@ -617,21 +774,22 @@ class MainScreen(QWidget):
             # Not fatal, but warn because SendInput into an elevated VS Code will fail.
             pass
         try:
-            self._create_project_and_open_vscode()
+            self._create_project_and_open_vscode(self.typing_target_file)
         except Exception as e:
             QMessageBox.critical(self, "Project", f"Failed to create project: {e}")
             return
         self._start_typing()
 
-    def _create_project_and_open_vscode(self):
+    def _create_project_and_open_vscode(self, file_to_open="index.html"):
         target = Path(__file__).resolve().parent.parent / CONFIG["PROJECT_DIR_NAME"]
         target.mkdir(parents=True, exist_ok=True)
         for fname in REQUIRED_FILES:
             # Create empty placeholders; typing will fill them.
             (target / fname).write_text("", encoding="utf-8")
-        # Open a separate VS Code window with index.html selected in the editor.
+        selected_file = target / file_to_open
+        # Open a separate VS Code window with the target file selected.
         subprocess.Popen(
-            ["code", "--new-window", str(target), str(target / "index.html")],
+            ["code", "--new-window", str(target), str(selected_file)],
             cwd=str(target), shell=True)
         deadline = time.time() + 15
         while time.time() < deadline:
@@ -700,6 +858,10 @@ class App(QStackedWidget):
         self.addWidget(self.main_screen)
         self.auth_screen.authed.connect(self._after_auth)
         self.payment_screen.paid.connect(lambda: self.setCurrentWidget(self.main_screen))
+        if CONFIG["DEVMODE"]:
+            self.setCurrentWidget(self.main_screen)
+        else:
+            self.setCurrentWidget(self.auth_screen)
 
     def _after_auth(self, has_access):
         self.setCurrentWidget(self.main_screen if has_access else self.payment_screen)
@@ -709,7 +871,7 @@ def main():
     app = QApplication(sys.argv)
     win = App()
     win.resize(1100, 700)
-    win.setWindowTitle("Zetech Learning — Site Scaffolder")
+    win.setWindowTitle("Codility Pro 254 — Site Scaffolder")
     win.show()
     sys.exit(app.exec())
 
