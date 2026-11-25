@@ -1,6 +1,6 @@
 # Zetech Learning API
 
-Standalone FastAPI backend for the Windows desktop app. It owns email sign-in, user records, one-time access entitlements, and M-Pesa Buy Goods STK Push. The desktop app only calls this API; Safaricom and SMTP credentials stay on the backend host.
+Standalone FastAPI backend for the Windows desktop app. It owns email sign-in, user records, one-time access entitlements, and M-Pesa Buy Goods STK Push. PostgreSQL is the database. The desktop app only calls this API; Safaricom and SMTP credentials stay on the backend host.
 
 ## How access works
 
@@ -11,7 +11,7 @@ Standalone FastAPI backend for the Windows desktop app. It owns email sign-in, u
 
 ## Local setup
 
-Use Python 3.10 or newer. From this directory:
+Use Python 3.10 or newer. In PowerShell, from this directory:
 
 ```powershell
 py -m venv .venv
@@ -20,13 +20,37 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Edit `.env` before starting the API. Set a random `JWT_SECRET` with at least 32 characters, configure a real SMTP sender, and use Daraja sandbox credentials and callback URL while developing. Run:
+The example config is for local development. It uses PostgreSQL at `127.0.0.1:5432`, with a development-only username and password. Start a local PostgreSQL database using Docker Compose:
+
+```powershell
+docker compose up -d db
+```
+
+If PostgreSQL is already installed or hosted, skip Compose and set `DATABASE_URL` in `.env` to that database. Use the form `postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE`; URL-encode special characters in the username or password. Do not use the example development password outside a local machine.
+
+Start PostgreSQL first, then edit `.env`. The example JWT value is deliberately rejected: replace it with a random secret of at least 32 characters. The API can start and serve `/health` without SMTP or Daraja settings, but email sign-in needs a working SMTP sender and payments need Daraja sandbox credentials plus a public HTTPS callback. Run:
 
 ```powershell
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 The API docs are available at `/docs`; health check is `/health`. The desktop app points to `http://127.0.0.1:8000` by default. For a separately hosted backend, change `API_URL` in `DesktopApp/main.py` to the public HTTPS API origin before packaging the client.
+
+### Run the desktop app
+
+Keep the API running. Open a second PowerShell window and run:
+
+```powershell
+cd H:\projects\moha\DesktopApp
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python main.py
+```
+
+If PowerShell blocks virtual-environment activation, skip activation and use `.venv\Scripts\python.exe` in place of `python` and `.venv\Scripts\python.exe -m pip` in place of `pip`. The desktop client already points to the local API at `http://127.0.0.1:8000`.
+
+To check only that the backend starts, open `http://127.0.0.1:8000/health` and `http://127.0.0.1:8000/docs`. To complete sign-in, configure SMTP and request an email code in the desktop app. To complete the payment flow, use Daraja sandbox credentials and expose the callback route over a temporary public HTTPS tunnel; Safaricom cannot call a `127.0.0.1` address. The Daraja portal supports sandbox app simulation for development. The app's project-creation button also requires the VS Code `code` command to be on PATH.
 
 ## Configuration
 
@@ -38,7 +62,7 @@ Copy `.env.example` and set:
 - `MPESA_BUSINESS_SHORTCODE` and `MPESA_TILL_NUMBER`. For Buy Goods STK Push the store/head-office shortcode is sent as `BusinessShortCode`; the customer-facing till is sent as `PartyB`.
 - `MPESA_CALLBACK_URL`: public HTTPS route `/api/payments/mpesa/callback`. Safaricom must be able to reach it directly.
 - `SMTP_*`: an SMTP account allowed to send the login codes.
-- `DATABASE_URL`: SQLite is convenient for local development. Use a managed PostgreSQL database for a multi-instance or production deployment, with persistent backups.
+- `DATABASE_URL`: PostgreSQL connection string. For production, use a managed PostgreSQL database, TLS if required by the provider, and persistent backups.
 - `CLIENT_ORIGINS`: comma-separated origins if a browser client is added. The current PySide desktop client is not subject to browser CORS.
 
 Never send credentials in chat, commit `.env`, or put Daraja keys in the desktop app. If credentials have already been shared outside the trusted backend environment, rotate them in Daraja.
@@ -56,4 +80,4 @@ The callback is public because Daraja calls it. It grants access only after the 
 
 ## Hosting checklist
 
-Deploy this folder as an API service with HTTPS, persistent PostgreSQL, SMTP access, and environment secrets. Expose the callback path publicly. Point the desktop app's `API_URL` at that API. Run one API worker initially if using SQLite; use PostgreSQL before running multiple workers. Back up the database because it contains user and payment records.
+Deploy this folder as an API service with HTTPS, PostgreSQL, SMTP access, and environment secrets. Expose the callback path publicly. Point the desktop app's `API_URL` at that API. Back up the database because it contains user and payment records.

@@ -16,7 +16,7 @@ def int_env(name: str, default: int) -> int:
 
 APP_ENV = env("APP_ENV", "development").lower()
 JWT_SECRET = env("JWT_SECRET")
-DATABASE_URL = env("DATABASE_URL", "sqlite:///./app.db")
+DATABASE_URL = env("DATABASE_URL", "postgresql+psycopg://zetech:local-only-change-me@127.0.0.1:5432/zetech_learning")
 OTP_TTL_SECONDS = int_env("OTP_TTL_SECONDS", 600)
 OTP_RESEND_SECONDS = int_env("OTP_RESEND_SECONDS", 60)
 OTP_MAX_ATTEMPTS = int_env("OTP_MAX_ATTEMPTS", 5)
