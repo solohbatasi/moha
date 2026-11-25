@@ -1,5 +1,5 @@
 # zetech_bot.py
-# Teaching demo: SMS auth gate -> VS Code project scaffolder -> visible input simulator.
+# Email sign-in -> one-time M-Pesa access -> VS Code project scaffolder.
 # Requires: pip install PySide6 pywin32 psutil requests
 # Run:      python zetech_bot.py
 
@@ -36,10 +36,7 @@ from PySide6.QtWidgets import (
 # CONFIG  --  edit this block for your environment
 # ============================================================================
 CONFIG = {
-    "MOCK_MODE": True,                                   # True = no server needed
-    "API_URL":   "https://example.com/ZetechLearning/Auth/Phone/",
-    "REQUEST_OTP_PATH": "",                              # appended to API_URL if split
-    "VERIFY_OTP_PATH":  "",                              # e.g. "verify/"
+    "API_URL":   "http://127.0.0.1:8000",
     "HTTP_TIMEOUT": 15,
     # typing knobs
     "DEFAULT_DELAY_MIN_MS": 15,
@@ -50,13 +47,6 @@ CONFIG = {
     "PROJECT_DIR_NAME": "MY Site",
 }
 
-# FLOW:
-# This client implements the two-step OTP flow:
-#   1) POST API_URL            {"phone": "<number>"}            -> {"success": true}
-#   2) POST API_URL+verify     {"phone": "<num>", "code": "<otp>"} -> {"success": true, "token": "..."}
-# If your server instead *sends a password* and expects no second step, set
-# TWO_STEP_OTP = False below and step 2 is skipped (server response is treated as final).
-TWO_STEP_OTP = True
 # ============================================================================
 
 
@@ -240,35 +230,42 @@ class AuthClient:
     def __init__(self, cfg):
         self.cfg = cfg
         self.token = None
-        self._mock_code = None
 
-    def request_otp(self, phone: str) -> bool:
-        if self.cfg["MOCK_MODE"]:
-            self._mock_code = "123456"
-            return True
-        url = self.cfg["API_URL"]
-        r = requests.post(url, json={"phone": phone}, timeout=self.cfg["HTTP_TIMEOUT"])
-        return r.ok and r.json().get("success") is True
+    def _post(self, path, payload, authenticated=False):
+        headers = {"Authorization": f"Bearer {self.token}"} if authenticated and self.token else {}
+        response = requests.post(self.cfg["API_URL"].rstrip("/") + path,
+                                 json=payload, headers=headers,
+                                 timeout=self.cfg["HTTP_TIMEOUT"])
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not response.ok:
+            raise RuntimeError(body.get("detail", f"Backend returned HTTP {response.status_code}"))
+        return body
 
-    def verify_otp(self, phone: str, code: str) -> bool:
-        if not TWO_STEP_OTP:
-            # Server already validated on step 1; treat step 1 response as final.
-            self.token = "no-token"
-            return True
-        if self.cfg["MOCK_MODE"]:
-            if code == self._mock_code:
-                self.token = "mock-token"
-                return True
-            return False
-        url = self.cfg["API_URL"] + self.cfg["VERIFY_OTP_PATH"]
-        r = requests.post(url, json={"phone": phone, "code": code},
-                          timeout=self.cfg["HTTP_TIMEOUT"])
-        if r.ok:
-            body = r.json()
-            if body.get("success") is True:
-                self.token = body.get("token", "no-token")
-                return True
-        return False
+    def request_email_code(self, email: str):
+        return self._post("/api/auth/email/request", {"email": email})
+
+    def verify_email_code(self, email: str, code: str):
+        body = self._post("/api/auth/email/verify", {"email": email, "code": code})
+        self.token = body["access_token"]
+        return body
+
+    def start_payment(self, phone: str):
+        return self._post("/api/payments/stk-push", {"phone": phone}, authenticated=True)
+
+    def payment_status(self, payment_id: str):
+        response = requests.get(self.cfg["API_URL"].rstrip("/") + "/api/payments/" + payment_id,
+                                headers={"Authorization": f"Bearer {self.token}"},
+                                timeout=self.cfg["HTTP_TIMEOUT"])
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not response.ok:
+            raise RuntimeError(body.get("detail", f"Backend returned HTTP {response.status_code}"))
+        return body
 
 
 # ----------------------------------------------------------------------------
@@ -359,88 +356,119 @@ class EscHotkey(threading.Thread):
 # ----------------------------------------------------------------------------
 # UI: Auth screen
 # ----------------------------------------------------------------------------
-class AuthScreen(QWidget):
-    authed = Signal()
+# Email and payment screens
+# ----------------------------------------------------------------------------
+class EmailAuthScreen(QWidget):
+    authed = Signal(bool)
 
-    def __init__(self, auth: AuthClient):
+    def __init__(self, auth):
         super().__init__()
         self.auth = auth
-        self.phone = ""
+        self.email = ""
         self.stage = 1
-        self._build()
-
-    def _build(self):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(60, 60, 60, 60)
         title = QLabel("Zetech Learning — Access")
         title.setStyleSheet("font-size: 22px; font-weight: 600;")
         lay.addWidget(title)
-
-        self.hint = QLabel("Enter your phone number to receive an access code.")
+        self.hint = QLabel("Enter your email address to receive a sign-in code.")
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
-
         self.input = QLineEdit()
-        self.input.setPlaceholderText("+254 7XX XXX XXX")
+        self.input.setPlaceholderText("you@example.com")
         lay.addWidget(self.input)
-
-        self.btn = QPushButton("Send code")
-        self.btn.clicked.connect(self._on_primary)
-        lay.addWidget(self.btn)
-
+        self.button = QPushButton("Send code")
+        self.button.clicked.connect(self._submit)
+        lay.addWidget(self.button)
         self.status = QLabel("")
         self.status.setStyleSheet("color: #b91c1c;")
+        self.status.setWordWrap(True)
         lay.addWidget(self.status)
         lay.addStretch(1)
 
-        if CONFIG["MOCK_MODE"]:
-            lay.addWidget(QLabel(
-                "MOCK MODE ON — no server contacted. Use code 123456."))
-
-    def _on_primary(self):
+    def _submit(self):
         self.status.setText("")
-        if self.stage == 1:
-            phone = self.input.text().strip()
-            if len(phone) < 7:
-                self.status.setText("Enter a valid phone number.")
-                return
-            self.btn.setEnabled(False)
-            try:
-                ok = self.auth.request_otp(phone)
-            except Exception as e:
-                self.status.setText(f"Network error: {e}")
-                self.btn.setEnabled(True)
-                return
-            self.btn.setEnabled(True)
-            if not ok:
-                self.status.setText("Server rejected the request.")
-                return
-            self.phone = phone
-            self.stage = 2
-            self.hint.setText("Enter the code sent to your phone.")
-            self.input.clear()
-            self.input.setPlaceholderText("6-digit code")
-            self.btn.setText("Verify")
-        else:
-            code = self.input.text().strip()
-            if not code:
-                self.status.setText("Enter the code.")
-                return
-            self.btn.setEnabled(False)
-            try:
-                ok = self.auth.verify_otp(self.phone, code)
-            except Exception as e:
-                self.status.setText(f"Network error: {e}")
-                self.btn.setEnabled(True)
-                return
-            self.btn.setEnabled(True)
-            if not ok:
-                self.status.setText("Invalid code.")
-                return
-            self.authed.emit()
+        self.button.setEnabled(False)
+        try:
+            if self.stage == 1:
+                self.email = self.input.text().strip()
+                self.auth.request_email_code(self.email)
+                self.stage = 2
+                self.hint.setText("Enter the 6-digit code sent to your email.")
+                self.input.clear()
+                self.input.setPlaceholderText("6-digit code")
+                self.button.setText("Verify")
+            else:
+                result = self.auth.verify_email_code(self.email, self.input.text().strip())
+                self.authed.emit(bool(result.get("has_access")))
+        except Exception as error:
+            self.status.setText(str(error))
+        finally:
+            self.button.setEnabled(True)
 
 
-# ----------------------------------------------------------------------------
+class PaymentScreen(QWidget):
+    paid = Signal()
+
+    def __init__(self, auth):
+        super().__init__()
+        self.auth = auth
+        self.payment_id = None
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(3000)
+        self.poll_timer.timeout.connect(self._check_payment)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(60, 60, 60, 60)
+        title = QLabel("One-time access payment")
+        title.setStyleSheet("font-size: 22px; font-weight: 600;")
+        lay.addWidget(title)
+        info = QLabel("Enter the M-Pesa number to receive a payment prompt. Access unlocks after Daraja confirms payment.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        self.phone = QLineEdit()
+        self.phone.setPlaceholderText("07XX XXX XXX or 2547XX XXX XXX")
+        lay.addWidget(self.phone)
+        self.button = QPushButton("Pay with M-Pesa")
+        self.button.clicked.connect(self._start_payment)
+        lay.addWidget(self.button)
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+        lay.addStretch(1)
+
+    def _start_payment(self):
+        self.status.setText("")
+        self.button.setEnabled(False)
+        try:
+            result = self.auth.start_payment(self.phone.text().strip())
+            if result.get("has_access") or result.get("status") == "paid":
+                self.paid.emit()
+                return
+            self.payment_id = result["payment_id"]
+            self.status.setText(f"{result.get('message', 'Check your phone to complete payment.')} Amount: KES {result['amount_kes']}.")
+            self.poll_timer.start()
+        except Exception as error:
+            self.status.setText(str(error))
+            self.button.setEnabled(True)
+
+    def _check_payment(self):
+        if not self.payment_id:
+            return
+        try:
+            result = self.auth.payment_status(self.payment_id)
+            if result.get("has_access"):
+                self.poll_timer.stop()
+                self.status.setText("Payment confirmed. Access unlocked.")
+                self.paid.emit()
+            elif result.get("status") == "failed":
+                self.poll_timer.stop()
+                self.payment_id = None
+                self.button.setEnabled(True)
+                self.status.setText("Payment was not completed. You can try again.")
+        except Exception as error:
+            self.status.setText(f"Checking payment status: {error}")
+
+
 # UI: Main screen
 # ----------------------------------------------------------------------------
 class MainScreen(QWidget):
@@ -664,11 +692,17 @@ class App(QStackedWidget):
     def __init__(self):
         super().__init__()
         self.auth = AuthClient(CONFIG)
-        self.auth_screen = AuthScreen(self.auth)
+        self.auth_screen = EmailAuthScreen(self.auth)
+        self.payment_screen = PaymentScreen(self.auth)
         self.main_screen = MainScreen()
         self.addWidget(self.auth_screen)
+        self.addWidget(self.payment_screen)
         self.addWidget(self.main_screen)
-        self.auth_screen.authed.connect(lambda: self.setCurrentIndex(1))
+        self.auth_screen.authed.connect(self._after_auth)
+        self.payment_screen.paid.connect(lambda: self.setCurrentWidget(self.main_screen))
+
+    def _after_auth(self, has_access):
+        self.setCurrentWidget(self.main_screen if has_access else self.payment_screen)
 
 
 def main():
