@@ -36,6 +36,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 The API docs are available at `/docs`; health check is `/health`. The desktop app points to `http://127.0.0.1:8000` by default. For a separately hosted backend, change `API_URL` in `DesktopApp/main.py` to the public HTTPS API origin before packaging the client.
 
+### Local test sign-in
+
+To skip email verification and payment while testing locally, set `TEST_MODE=true` in the backend `.env` and `CODILITY_TEST_MODE=true` in the desktop app's environment before launching it. The test password and bearer token default to `12345678`; set `TEST_PASSWORD` in the backend `.env` and `CODILITY_TEST_PASSWORD` for the desktop app to change the password. The backend only accepts test sign-ins and the test token from a loopback connection, and test mode is disabled unless `APP_ENV=development`. Leave it disabled for deployments.
+
+For frontend work that does not need the backend, set `CODILITY_DEVMODE=true` before launching the desktop app. This opens the project workspace directly and skips the sign-in and payment screens. It is off by default; clear the variable or set it to `false` to restore the normal flow.
+
 ### Run the desktop app
 
 Keep the API running. Open a second PowerShell window and run:

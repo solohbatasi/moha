@@ -11,8 +11,8 @@ def send_login_code(recipient: str, code: str) -> None:
     sender = required("SMTP_FROM_EMAIL")
     port = int(env("SMTP_PORT", "587"))
     message = EmailMessage()
-    message["Subject"] = "Your Zetech Learning sign-in code"
-    message["From"] = f'{env("SMTP_FROM_NAME", "Zetech Learning")} <{sender}>'
+    message["Subject"] = "Your Codility Pro 254 sign-in code"
+    message["From"] = f'{env("SMTP_FROM_NAME", "Codility Pro 254")} <{sender}>'
     message["To"] = recipient
     message.set_content(f"Your sign-in code is {code}. It expires in 10 minutes. If you did not request it, ignore this email.")
 

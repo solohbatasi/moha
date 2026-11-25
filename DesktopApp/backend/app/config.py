@@ -15,6 +15,10 @@ def int_env(name: str, default: int) -> int:
 
 
 APP_ENV = env("APP_ENV", "development").lower()
+TEST_MODE = APP_ENV == "development" and env("TEST_MODE", "false").lower() in {"1", "true", "yes"}
+TEST_PASSWORD = env("TEST_PASSWORD", "12345678")
+TEST_ACCESS_TOKEN = "12345678"
+TEST_USER_EMAIL = "codility-test-user@localhost"
 JWT_SECRET = env("JWT_SECRET")
 DATABASE_URL = env("DATABASE_URL", "postgresql+psycopg://zetech:local-only-change-me@127.0.0.1:5432/zetech_learning")
 OTP_TTL_SECONDS = int_env("OTP_TTL_SECONDS", 600)
