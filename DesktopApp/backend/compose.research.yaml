@@ -1,0 +1,61 @@
+services:
+  db:
+    image: mariadb:11.4
+    container_name: ictdev-research-api-db
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE:?Set MARIADB_DATABASE in .env}
+      MARIADB_USER: ${MARIADB_USER:?Set MARIADB_USER in .env}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?Set MARIADB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Set MARIADB_ROOT_PASSWORD in .env}
+    volumes:
+      - research_api_mariadb:/var/lib/mysql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    container_name: ictdev-research-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: "mysql+pymysql://${MARIADB_USER}:${MARIADB_PASSWORD}@db:3306/${MARIADB_DATABASE}?charset=utf8mb4"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+      - coolify
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: coolify
+      traefik.http.routers.ictdev-research-api-http.rule: "Host(`${API_HOST}`)"
+      traefik.http.routers.ictdev-research-api-http.entrypoints: http
+      traefik.http.routers.ictdev-research-api-http.middlewares: ictdev-research-api-https
+      traefik.http.middlewares.ictdev-research-api-https.redirectscheme.scheme: https
+      traefik.http.routers.ictdev-research-api-https.rule: "Host(`${API_HOST}`)"
+      traefik.http.routers.ictdev-research-api-https.entrypoints: https
+      traefik.http.routers.ictdev-research-api-https.tls: "true"
+      traefik.http.routers.ictdev-research-api-https.tls.certresolver: letsencrypt
+      traefik.http.routers.ictdev-research-api-https.service: ictdev-research-api
+      traefik.http.services.ictdev-research-api.loadbalancer.server.port: "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  backend:
+    internal: true
+  coolify:
+    external: true
+
+volumes:
+  research_api_mariadb:
